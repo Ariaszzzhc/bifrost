@@ -104,16 +104,66 @@ async function startServerConnectionPipeline(
       break;
     }
 
-    request.w = writer
+    request.w = writer;
 
     await handler(request);
 
-    const resError = await request.done
+    const resError = await request.done;
 
     if (resError) {
-      return
+      return;
     }
 
-    await request.finalize()
+    await request.finalize();
+  }
+}
+
+// Bifrost Application
+
+class Application {
+  server: HttpServer | null;
+  enviroment: ApplicationEnviroment;
+
+  constructor(enviroment: ApplicationEnviroment) {
+    this.server = null;
+    this.enviroment = enviroment;
+  }
+
+  public run() {
+    this.server = createHttpServer(this.enviroment.settings, async (req) => {
+      const call = new ApplicationCall(req);
+      // intercepter
+
+      // request handling
+      try {
+      } catch (error) {
+        // error handling
+      } finally {
+      }
+    });
+  }
+}
+
+interface ApplicationEnviroment {
+  settings: HttpServerSettings;
+}
+
+class ApplicationCall {
+  private request: ServerRequest;
+
+  constructor(request: ServerRequest) {
+    this.request = request;
+  }
+
+  public async respond<T>(value: T) {
+    await this.request.respond({
+      body: JSON.stringify(value),
+    });
+  }
+
+  public async respondText(value: string) {
+    await this.request.respond({
+      body: value,
+    });
   }
 }
