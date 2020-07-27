@@ -4,11 +4,15 @@ import { ServerRequest } from "https://deno.land/std/http/server.ts";
 import { readRequest, writeResponse } from "https://deno.land/std/http/_io.ts";
 import { encode } from "https://deno.land/std/encoding/utf8.ts";
 
-type RequestHandler = (req: ServerRequest) => Promise<void>;
+// type RequestHandler = (req: ServerRequest) => Promise<void>;
+
+interface RequestHandler {
+  (req: ServerRequest): Promise<unknown>
+}
 
 export interface HttpServer {
-  rootServerPromise: Promise<any>;
-  acceptPromise: Promise<any>;
+  rootServerPromise: Promise<unknown>;
+  acceptPromise: Promise<unknown>;
   serverListenerPromise: Deferred<Deno.Listener>;
 }
 
@@ -43,7 +47,7 @@ export function createHttpServer(
         const clientPromise = startServerConnectionPipeline(conn, handler);
 
         clientPromise.then(() => {
-          conn.close;
+          conn.close();
         });
       } catch (error) {
         if (
