@@ -1,173 +1,129 @@
-import { deferred, Deferred } from "https://deno.land/std/async/deferred.ts";
-import { BufReader, BufWriter } from "https://deno.land/std/io/bufio.ts";
-import { ServerRequest } from "https://deno.land/std/http/server.ts";
-import { readRequest, writeResponse } from "https://deno.land/std/http/_io.ts";
-import { encode } from "https://deno.land/std/encoding/utf8.ts";
+import { Deferred, deferred } from "https://deno.land/std/async/deferred.ts";
+import {
+  serve,
+  Server,
+  ServerRequest,
+} from "https://deno.land/std/http/server.ts";
 
-// type RequestHandler = (req: ServerRequest) => Promise<void>;
-
-interface RequestHandler {
-  (req: ServerRequest): Promise<unknown>
-}
+export type RequestHandler = (req: ServerRequest) => Promise<unknown>;
 
 export interface HttpServer {
-  rootServerPromise: Promise<unknown>;
-  acceptPromise: Promise<unknown>;
-  serverListenerPromise: Deferred<Deno.Listener>;
+  rootJob: Promise<void>;
+  handleJob: Promise<void>;
+  denoServer: Deferred<Server>;
 }
 
-export interface HttpServerSettings {
-  port: number;
-  host: string;
-}
-
-export function createHttpServer(
-  settings: HttpServerSettings,
+export const createHttpServer = (
+  host: string,
+  port: number,
   handler: RequestHandler,
-): HttpServer {
-  const listenerPromise = deferred<Deno.Listener>();
+): HttpServer => {
+  const server = deferred<Server>();
   const serverLatch = deferred();
 
-  const serverPromise = new Promise((resolve, reject) => {
-    serverLatch.then(resolve).catch((e) => reject(e));
-  });
+  const rootJob = (async () => {
+    await serverLatch;
+  })();
 
-  const acceptJob = async () => {
-    const listener = Deno.listen({
-      port: settings.port,
-      hostname: settings.host,
+  const handleJob = (async () => {
+    const denoServer = serve({
+      hostname: host,
+      port: port,
     });
 
-    listenerPromise.resolve(listener);
+    server.resolve(denoServer);
 
-    while (true) {
-      try {
-        const conn = await listener.accept();
-
-        const clientPromise = startServerConnectionPipeline(conn, handler);
-
-        clientPromise.then(() => {
-          conn.close();
-        });
-      } catch (error) {
-        if (
-          error instanceof Deno.errors.BadResource ||
-          error instanceof Deno.errors.InvalidData ||
-          error instanceof Deno.errors.UnexpectedEof
-        ) {
-        }
-
-        throw error;
-      }
+    for await (const req of denoServer) {
+      handler(req);
     }
-  };
+  })();
 
-  const acceptPromise = acceptJob();
-
-  acceptPromise
+  handleJob
     .then(() => {
       serverLatch.resolve();
     })
     .catch((e) => {
-      listenerPromise.reject(e);
+      server.reject(e);
     });
 
   return {
-    rootServerPromise: serverPromise,
-    acceptPromise: acceptPromise,
-    serverListenerPromise: listenerPromise,
+    rootJob,
+    handleJob,
+    denoServer: server,
   };
+};
+type CallHandler = (call: BifrostCall) => Promise<unknown>;
+
+enum HttpMethod {
+  GET = "GET",
+  POST = "POST",
+  DELETE = "DELETE",
+  PATCH = "PATCH",
+  PUT = "PUT",
 }
 
-async function startServerConnectionPipeline(
-  conn: Deno.Conn,
-  handler: RequestHandler,
-) {
-  const reader = new BufReader(conn);
-  const writer = new BufWriter(conn);
+interface Route {
+  method: HttpMethod;
+  handler: CallHandler;
+}
 
-  while (true) {
-    let request: ServerRequest | null;
-    try {
-      request = await readRequest(conn, reader);
-    } catch (error) {
-      if (
-        error instanceof Deno.errors.InvalidData ||
-        error instanceof Deno.errors.UnexpectedEof
-      ) {
-        await writeResponse(writer, {
-          status: 400,
-          body: encode(`${error.message}\r\n\r\n`),
-        });
-      }
+export class Routes {
+  private routes: Map<string, Route[]>;
 
-      break;
+  constructor() {
+    this.routes = new Map<string, Route[]>();
+  }
+
+  public get(path: string, handler: CallHandler) {
+    this.add(path, HttpMethod.GET, handler);
+  }
+
+  public delete(path: string, handler: CallHandler) {
+    this.add(path, HttpMethod.DELETE, handler);
+  }
+
+  public post(path: string, handler: CallHandler) {
+    this.add(path, HttpMethod.POST, handler);
+  }
+
+  public put(path: string, handler: CallHandler) {
+    this.add(path, HttpMethod.PUT, handler);
+  }
+
+  public patch(path: string, handler: CallHandler) {
+    this.add(path, HttpMethod.PATCH, handler);
+  }
+
+  public add(path: string, method: HttpMethod, handler: CallHandler) {
+    if (this.routes.has(path)) {
+      const rs = this.routes.get(path);
+      this.routes.set(path, [...rs!!, { method, handler }]);
+    } else {
+      this.routes.set(path, [{ method, handler }]);
     }
+  }
 
-    if (request === null) {
-      break;
-    }
+  public check(path: string) {
+    return this.routes.has(path);
+  }
 
-    request.w = writer;
-
-    await handler(request);
-
-    const resError = await request.done;
-
-    if (resError) {
-      return;
-    }
-
-    await request.finalize();
+  public getRoute(path: string): Route[] | undefined {
+    return this.routes.get(path);
   }
 }
 
-// Bifrost Application
+export class BifrostCall {
+  private req: ServerRequest;
 
-class Application {
-  server: HttpServer | null;
-  enviroment: ApplicationEnviroment;
-
-  constructor(enviroment: ApplicationEnviroment) {
-    this.server = null;
-    this.enviroment = enviroment;
+  constructor(req: ServerRequest) {
+    this.req = req;
   }
 
-  public run() {
-    this.server = createHttpServer(this.enviroment.settings, async (req) => {
-      const call = new ApplicationCall(req);
-      // intercepter
-
-      // request handling
-      try {
-      } catch (error) {
-        // error handling
-      } finally {
-      }
-    });
-  }
-}
-
-interface ApplicationEnviroment {
-  settings: HttpServerSettings;
-}
-
-class ApplicationCall {
-  private request: ServerRequest;
-
-  constructor(request: ServerRequest) {
-    this.request = request;
+  public async respondText(text: string): Promise<void> {
+    await this.req.respond({ body: text });
   }
 
-  public async respond<T>(value: T) {
-    await this.request.respond({
-      body: JSON.stringify(value),
-    });
-  }
-
-  public async respondText(value: string) {
-    await this.request.respond({
-      body: value,
-    });
+  public async respondJson(obj: unknown): Promise<void> {
+    await this.req.respond({ body: JSON.stringify(obj) });
   }
 }
